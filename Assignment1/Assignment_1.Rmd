@@ -1,0 +1,293 @@
+---
+title: "DA3 - Assignment 1"
+author: "Ersan Kucukoglu"
+output: 
+  pdf_document :
+    keep_tex: true
+    number_sections: true
+header-includes:
+ \usepackage{booktabs}
+ \usepackage{longtable}
+ \usepackage{array}
+ \usepackage{multirow}
+ \usepackage{wrapfig}
+ \usepackage{float}
+ \floatplacement{figure}{H}
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos = 'H')
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+# CLEAR MEMORY
+rm(list=ls())
+
+# Import libraries
+library(data.table)
+library(tidyverse)
+library(fixest)
+library(caret)
+library(modelsummary)
+library(grid)
+library(kableExtra)
+
+#import cps_earnings data
+cps_earnings <- fread("https://osf.io/4ay9x/download")
+
+# check the datatable
+#glimpse( cps_earnings )
+```
+
+```{r, include=FALSE,echo=FALSE, message=FALSE, warning=FALSE}
+# Data Cleaning
+# 
+#select occupation : Financial Specialists
+dt <- cps_earnings[occ2012>=0800 & occ2012<=0950]
+
+# check frequency by age
+datasummary( factor(age) ~ N + Percent() , data = dt)
+#keep only between 22 and 64
+dt <- dt[age>=22 & age<=64]
+# Creating age squared column
+dt <- dt[, agesq := age^2]
+
+# check frequency by grade92
+datasummary(factor(grade92) ~ N + Percent() , data = dt)
+# keep the BA,MA graduated only
+dt <- dt[grade92 %in% c(40,43,44)]
+
+dt <- dt[grade92 == 40, education_level := "College_NoDegree"]
+dt <-dt[grade92 == 43, education_level := "BA"]
+dt <-dt[grade92 == 44, education_level := "MA"]
+
+# check frequency by sex
+datasummary(factor(sex) ~ N + Percent() , data = dt)
+
+# check frequency by Employed
+datasummary( lfsr94 ~ N + Percent() , data = dt)
+
+# keep the "Employed-At Work" only
+dt <- dt[lfsr94=="Employed-At Work"]
+
+# check frequency by class
+datasummary( class ~ N + Percent() , data = dt)
+
+dt <- dt[class %chin% c("Private, For Profit","Private, Nonprofit"), Class:="Private"]
+dt <- dt[class %chin% c("Government - Federal","Government - Local","Government - State"), Class:="Government"]
+dt <- dt[,-c("class")]
+
+# Filtering on uhours to work on full time employee 
+dt <- dt[uhours >= 40]
+
+#Create a variable which takes the log wage per hour
+dt <- dt[, wage_per_hour:=earnwke/uhours]
+dt <- dt[, lnwage_per_hour:=log(wage_per_hour)]
+
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+
+###
+# Data refactoring
+
+# grade92
+dt <- dt %>%
+  mutate(College=ifelse(grade92 == 40, 1,0),
+         BA = ifelse(grade92 == 43, 1,0),
+         MA = ifelse(grade92 == 44, 1,0))
+# sex
+dt <- dt %>%
+  mutate(male = ifelse(sex == 1, 1,0),
+         female = ifelse(sex == 2, 1,0))
+
+# class
+dt <- dt %>%
+  mutate(Private = ifelse(Class == "Private", 1,0),
+         Government = ifelse(Class == "Government", 1,0))
+
+```
+
+```{r, include=FALSE,echo=FALSE,message=FALSE, warning=FALSE}
+
+# Frequency tables
+
+# gender
+datasummary( factor(sex) * wage_per_hour ~ N + Mean , data = dt )        
+# education level
+datasummary( factor(education_level) * wage_per_hour ~ N + Mean , data = dt )
+# sector
+datasummary( factor(Class) * wage_per_hour ~ N + Mean , data = dt )
+
+
+datasummary(male + female + College + BA + MA + Private + Government ~
+               Mean + Median + Min + Max + P25 + P75 + N , data = dt )
+```
+
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+#####
+# Histograms - check the outcome variable
+
+# wage_per_hour
+p1 <- ggplot(data=dt, aes(x=wage_per_hour)) +
+  geom_histogram(aes(y = (..count..)/sum(..count..)),bins = 50, boundary=0,
+                 fill = 'navyblue', color = 'white', size = 0.25, alpha = 0.8,  show.legend=F, na.rm=TRUE) +
+  labs(x = "Earning per hour",y = "Percent")+
+  theme_bw() +
+  expand_limits(x = 0.01, y = 0.01) +
+  scale_y_continuous(expand = c(0.01,0.01),labels = scales::percent_format(accuracy = 1)) +
+  scale_x_continuous(expand = c(0.01,0.01),breaks = seq(0,75, 10))
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+
+################################################
+#  REGRESSION ANALYSIS I. - Predicting Price
+#
+# lowess with observations
+
+p2 <- ggplot(data = dt, aes(x=age, y=wage_per_hour)) +
+  geom_point( color = 'blue', size = 2,  shape = 16, alpha = 0.8, show.legend=F, na.rm = TRUE) + 
+  geom_smooth(method="loess", se=F, colour='red', size=1, span=0.9) +
+  labs(x = "Age (years)",y = "Earning per hour") +
+  theme_bw()
+
+# Lowess vs. quadratic specification with age
+p3 <- ggplot(data = dt, aes(x=age,y=wage_per_hour)) +
+  geom_smooth( aes(colour='red'), method="loess", formula = y ~ x,se=F, size=1) +
+  geom_smooth( aes(colour='black'), method="lm", formula = y ~ poly(x,2) , se=F, size=1) +
+  geom_point( aes( y = wage_per_hour ) , color = 'blue', size = 1,  shape = 16, alpha = 0.8, show.legend=F, na.rm = TRUE) + 
+  labs(x = "Age (years)",y = "Earning per hour",title = "Figure 1. Earning per hour vs. age", subtitle = "Lowess vs. quadratic specification with age") +
+  scale_color_manual(name="", values=c('red','black'),labels=c("Lowess in age","Quadratic in age")) +
+  theme_bw() +
+  theme(legend.position = c(0.7,0.7),
+        legend.direction = "horizontal",
+        legend.background = element_blank(),
+        legend.box.background = element_rect(color = "white"))
+
+```
+
+```{r,echo=FALSE,message=FALSE, warning=FALSE}
+#######################################################
+#  Running linear regressions using all observations
+
+# Model 1: Linear regression on age
+model1 <- as.formula(wage_per_hour ~ age + agesq)
+model2 <- as.formula(wage_per_hour ~ age + agesq + male + female)
+model3 <- as.formula(wage_per_hour ~ age + agesq + male + female + College + BA+ MA )
+model4 <- as.formula(wage_per_hour ~ age + agesq + male + female + College + BA+ MA +female*College + female*BA + female*MA +Private + Government)
+
+# Running simple OLS
+reg1 <- feols(model1, data=dt, vcov = 'hetero')
+reg2 <- feols(model2, data=dt, vcov = 'hetero')
+reg3 <- feols(model3, data=dt, vcov = 'hetero')  
+reg4 <- feols(model4, data=dt, vcov = 'hetero')  
+
+fitstat_register("k", function(x){length( x$coefficients ) - 1}, "No. Variables")
+table <- etable( reg1 , reg2 , reg3 , reg4  , fitstat = c('aic','bic','rmse','r2','n','k') )
+
+```
+
+```{r,echo=FALSE,message=FALSE, warning=FALSE}
+
+#####################
+#  Cross-validation for better evaluation of predictive performance
+#
+# Simple k-fold cross validation setup:
+# 1) Used method for estimating the model: "lm" - linear model (y_hat = b0+b1*x1+b2*x2 + ...)
+# 2) set number of folds to use (must be less than the no. observations)
+k <- 4
+
+# We use the 'train' function which allows many type of model training -> use cross-validation
+set.seed(13505)
+cv1 <- train(model1, dt, method = "lm", trControl = trainControl(method = "cv", number = k))
+set.seed(13505)
+cv2 <- train(model2, dt, method = "lm", trControl = trainControl(method = "cv", number = k))
+set.seed(13505)
+cv3 <- train(model3, dt, method = "lm", trControl = trainControl(method = "cv", number = k), na.action = "na.omit")
+set.seed(13505)
+cv4 <- train(model4, dt, method = "lm", trControl = trainControl(method = "cv", number = k), na.action = "na.omit")
+
+
+# Calculate RMSE for each fold and the average RMSE as well
+cv <- c("cv1", "cv2", "cv3", "cv4")
+rmse_cv <- c()
+
+for(i in 1:length(cv)){
+  rmse_cv[i] <- sqrt((get(cv[i])$resample[[1]][1]^2 +
+                        get(cv[i])$resample[[1]][2]^2 +
+                        get(cv[i])$resample[[1]][3]^2 +
+                        get(cv[i])$resample[[1]][4]^2)/4)
+}
+# summarize results
+cv_mat <- data.frame(rbind(cv1$resample[4], "Average"),
+                     rbind(cv1$resample[1], rmse_cv[1]),
+                     rbind(cv2$resample[1], rmse_cv[2]),
+                     rbind(cv3$resample[1], rmse_cv[3]),
+                     rbind(cv4$resample[1], rmse_cv[4]))
+                     
+
+colnames(cv_mat)<-c("Resample","Model1", "Model2", "Model3", "Model4")
+```
+
+```{r,echo=FALSE,message=FALSE, warning=FALSE}
+
+# Show model complexity and out-of-sample RMSE performance
+m_comp <- c()
+models <- c("reg1", "reg2", "reg3", "reg4")
+for( i in 1 : length(cv) ){
+  m_comp[ i ] <- length( get( models[i] )$coefficient  - 1 ) 
+}
+m_comp <- tibble( model = models , 
+                  complexity = m_comp,
+                  RMSE = rmse_cv )
+
+p4 <- ggplot( m_comp , aes( x = complexity , y = RMSE ) ) +
+  geom_point(color='red',size=2) +
+  geom_line(color='blue',size=0.5)+
+  labs(x='Number of explanatory variables',y='Averaged RMSE on test samples',
+       title='Figure 2. Prediction performance and model compexity') +
+  theme_bw()
+
+```
+
+
+In this Assignment, I analyzed Financial Specialists' wages from the [CPS suvery](https://osf.io/4ay9x/download). First, as usual , I started with data cleaning. I kept only the College Non-degree, BA, MA graduated degrees, including employed-at-work people which is common in the dataset. Since the age is mostly distributed between 22 and 64, I filtered the age variable between 22 and 64. As we can see from Figure 1 that shows the Lowess vs. quadratic specification with age, the quadratic line just fit differently after 50 because quadratic tries to force curvature, so I don't think it's relevant, the loess graph is the closest fit on the data so its more reliable.Age has positive effect on wage per hour until some point. I also filtered the Financial Specialists who work as full-time employees (hours >= 40).  I created the wage per hour variable by dividing weekly earnings by hours.  I only focused on being employed at work because the other earnings are difficult to measure like self-earning and included those who reported 20 hours or more as their usual weekly time worked. 
+As a result, I have Financial Specialists data with 2437 observations which have only College, BA, MA, and as the highest education level.
+
+*Four Regression Models*
+
+- Model 1 : wage_per_hour ~ age + agesq
+- Model 2 : wage_per_hour ~ age + agesq + male + female
+- Model 3 : wage_per_hour ~ age + agesq + male + female + College + BA+ MA
+- Model 4 : wage_per_hour ~ age + agesq + male + female + College + BA+ MA + female* College + female* BA + female*MA +Private + Government
+
+Using the data, four prediction models were built which can be seen above. I started by adding age and gender and then gradually added more variables. Table 1 shows the regression coefficients of the four regression models.
+To find the best model, i first evaluated the BIC values along with R-squared and the RMSE in Table 1. Second, by  using k-fold cross validation I set k=4, it means splitting the data into four in a random fashion to define the four test sets. According to the both approaches, Model 3 and Model 4 have the best prediction properties. They have the lowest BIC (19,833.6 and 19,854.7), and also they have the lowest average cross- validated RMSE values(14.054 and 14.097), in the Table 2. In addition to the Table 1, we can see the number of the variables and averaged RMSE on the test samples from the Prediction Performance and model complexity graph. Model performance is better as number of predictor variables is larger from the beginning. However, after a certain point (6), model performance is worse, as number of predictor variables is getting larger. According to performance measures, the actual difference between two models is very small. Choosing a simple model can be valuable as it may help us avoid overfitting the live data. Since the Model 3 and Model 4 have RMSE values that are very close, it make sense to choose Model 3.
+
+\pagebreak
+
+## Appendix 
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE}
+kable(table,caption = " Regression Models for predicting earning per hour", "latex", longtable = T, booktabs = T) %>%
+  kable_styling(font_size = 7)
+
+```
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE,fig.pos="H"}
+
+kable(cv_mat,caption = " 4-fold cross-validation and RMSE", "latex", longtable = T, booktabs = T) %>%
+  kable_styling(font_size = 10)
+```
+
+```{r,echo=FALSE,fig.width=8, fig.height=4}
+p3 
+```
+
+```{r,echo=FALSE}
+p4
+```
+
+
