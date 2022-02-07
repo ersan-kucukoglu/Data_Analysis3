@@ -13,18 +13,18 @@ library(fixest)
 
 ########################################
 #####
+
 # Load data
+gz <- gzfile('~/Desktop/BA-Courses/Data_Analysis3/Assignment2/data/raw/shanghai.csv.gz','rt') 
+listings <- read.csv( gz, header = T )
 
-raw <- fread("https://raw.githubusercontent.com/ersan-kucukoglu/Data_Analysis3/main/Assignment2/data/raw/listings.csv?token=GHSAT0AAAAAABQMT6P6D4S224U7FNT32ADYYQJFSEA")
-
-shanghai <- read_csv("~/Downloads/shanghai.csv.gz")
 # filter the data frame for apartments that can accommodate 2-6 guests --------
 
 # check room_type variable
-table(shanghai$room_type)
+table(listings$room_type)
 
 # keep if room_type is entire home/apartment
-data <- shanghai %>% filter( room_type == 'Entire home/apt')
+data <- listings %>% filter( room_type == 'Entire home/apt')
 
 # drop room_type variable
 data <- data %>% select( -room_type )
